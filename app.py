@@ -325,17 +325,18 @@ def decrypt_notification():
 # from uuid import uuid4
 
 # --- Configurações de Produção CMI ---
-# URL oficial de Produção que você conseguiu
+
+# 1. URL (Sem espaços no final)
 CMI_URL = os.environ.get("CMI_URL", "https://globalapi.udbac.com:18084/aep/APP_getSubscriberAllQuota_SBO/v2")
 
-# Suas credenciais (Verifique se a senha Peter@2023 é a atual do portal)
-CMI_APP_KEY = os.environ.get("CMI_APP_KEY", "o4rnH6VFc_vzqpDW-C5Xpoi-o8yw") 
-CMI_APP_SECRET = os.environ.get("CMI_APP_SECRET", "Peter@2023") 
+# 2. APP KEY (A causa do erro 1000002)
+# Verifique se não há espaço antes do 'o' ou depois do 'w' dentro das aspas
+CMI_APP_KEY = os.environ.get("CMI_APP_KEY", "o4rnH6VFc_vzqpDW-C5Xpoi-o8yw")
 
-# Chaves FIXAS para Criptografia do Corpo (AES-128-CBC)
-# Estas chaves são padrão da CMI e não mudam
-CMI_AES_KEY = b'u1d0b9a2c37U8d46'
-CMI_AES_IV = b'1016449182184177'
+# 3. APP SECRET (Sua senha do portal)
+# Se a senha estiver errada, daria erro 1000001. Como está dando 1000002, o foco é a KEY acima.
+# Mas garanta que esta senha é a correta.
+CMI_APP_SECRET = os.environ.get("CMI_APP_SECRET", "Peter@2023")
 
 # --- Funções Auxiliares CMI ---
 
