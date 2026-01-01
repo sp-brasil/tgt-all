@@ -316,36 +316,52 @@ def decrypt_notification():
 
 
 # ==========================================
-# --- INTEGRAÇÃO CMI (CHINA MOBILE) ---
+# --- INTEGRAÇÃO CMI (CHINA MOBILE) - FINAL ---
 # ==========================================
 
-# --- Configurações CMI ---
-# Configure estas variáveis no Painel do Render (Environment Variables)
-# Se preferir hardcoded (não recomendado para github público), substitua os valores aqui.
-CMI_URL = os.environ.get("CMI_URL", "https://globalapi.udbac.com:18084/aep/APP_getSubscriberAllQuota_SBO/v2")
-CMI_APP_KEY = os.environ.get("CMI_APP_KEY", "o4rnH6VFc_vzqpDW-C5Xpoi-o8yw") # Sua AppKey de Produção
-CMI_APP_SECRET = os.environ.get("CMI_APP_SECRET", "Peter@2023") # IMPORTANTE: Preencha ou use ENV var
+# Adicione estas importações no topo do seu arquivo se ainda não estiverem lá:
+# import base64
+# import hashlib
+# from uuid import uuid4
 
-# Chaves FIXAS para Criptografia do Corpo (AES-128-CBC) conforme documentação CMI
+# --- Configurações de Produção CMI ---
+# URL oficial de Produção que você conseguiu
+CMI_URL = os.environ.get("CMI_URL", "https://globalapi.udbac.com:18084/aep/APP_getSubscriberAllQuota_SBO/v2")
+
+# Suas credenciais (Verifique se a senha Peter@2023 é a atual do portal)
+CMI_APP_KEY = os.environ.get("CMI_APP_KEY", "o4rnH6VFc_vzqpDW-C5Xpoi-o8yw") 
+CMI_APP_SECRET = os.environ.get("CMI_APP_SECRET", "Peter@2023") 
+
+# Chaves FIXAS para Criptografia do Corpo (AES-128-CBC)
+# Estas chaves são padrão da CMI e não mudam
 CMI_AES_KEY = b'u1d0b9a2c37U8d46'
 CMI_AES_IV = b'1016449182184177'
 
 # --- Funções Auxiliares CMI ---
 
 def cmi_get_wsse_header():
-    """Gera o cabeçalho de autenticação WSSE exigido pela CMI."""
-    # 1. Nonce (Aleatório)
-    nonce = hashlib.md5(str(uuid4()).encode('utf-8')).hexdigest()
+    """
+    Gera o cabeçalho X-WSSE seguindo a lógica Java fornecida pela CMI:
+    Passo 1: passwordStr = nonce + created + appSecret
+    Passo 2: hash = SHA256(passwordStr)
+    Passo 3: PasswordDigest = Base64(hash)
+    """
+    # 1. Nonce: String aleatória (usando UUID hex para garantir unicidade e sem caracteres especiais)
+    nonce = uuid4().hex 
     
-    # 2. Created (Timestamp UTC ISO 8601)
+    # 2. Created: Timestamp UTC no formato ISO 8601
     created = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
     
-    # 3. PasswordDigest = Base64(SHA256(Nonce + Created + Password))
-    # Nota: O Nonce é concatenado como string
+    # 3. Concatenação (Java: passwordStr = nonce + created + appSecret)
+    # Importante: A ordem é estrita e sem separadores
     raw_string = nonce + created + CMI_APP_SECRET
     
-    sha256_hash = hashlib.sha256(raw_string.encode('utf-8')).digest()
-    password_digest = base64.b64encode(sha256_hash).decode('utf-8')
+    # 4. Hashing (Java: digest.digest(passwordStr.getBytes()))
+    # Usa SHA-256 e garante UTF-8
+    sha256_bytes = hashlib.sha256(raw_string.encode('utf-8')).digest()
+    
+    # 5. Encoding (Java: Base64.encodeBase64String(hash))
+    password_digest = base64.b64encode(sha256_bytes).decode('utf-8')
 
     return {
         'Authorization': 'WSSE realm="SDP", profile="UsernameToken", type="Appkey"',
@@ -353,95 +369,102 @@ def cmi_get_wsse_header():
     }
 
 def cmi_encrypt_body(payload_dict):
-    """Criptografa o JSON usando AES-128-CBC e retorna Base64 string."""
+    """
+    Criptografa o payload JSON usando AES-128-CBC.
+    Retorna uma string Base64.
+    """
     try:
-        # A CMI espera que o payload seja uma string JSON
+        # O payload deve ser uma string JSON
         json_str = json.dumps(payload_dict)
         
+        # Configura a cifra AES
         cipher = AES.new(CMI_AES_KEY, AES.MODE_CBC, CMI_AES_IV)
-        # Pad usando PKCS7 (padrão do block_size AES)
+        
+        # Faz o Padding (preenchimento) para múltiplo de 16 bytes
         padded_data = pad(json_str.encode('utf-8'), AES.block_size)
+        
+        # Criptografa
         encrypted_bytes = cipher.encrypt(padded_data)
         
-        # Retorna em Base64 (diferente da Tuge que usa Hex)
+        # Retorna como Base64
         return base64.b64encode(encrypted_bytes).decode('utf-8')
     except Exception as e:
         print(f"Erro na criptografia CMI: {str(e)}")
         raise
 
 def cmi_decrypt_response(encrypted_base64_str):
-    """Descriptografa a resposta da CMI (Base64 -> AES-128-CBC -> JSON)."""
+    """
+    Descriptografa a resposta da CMI (Base64 -> AES -> JSON).
+    """
     try:
         if not encrypted_base64_str:
             return {}
             
+        # Decodifica Base64
         encrypted_bytes = base64.b64decode(encrypted_base64_str)
-        cipher = AES.new(CMI_AES_KEY, AES.MODE_CBC, CMI_AES_IV)
-        decrypted_padded = cipher.decrypt(encrypted_bytes)
         
+        # Configura a cifra para descriptografar
+        cipher = AES.new(CMI_AES_KEY, AES.MODE_CBC, CMI_AES_IV)
+        
+        # Descriptografa e remove o Padding
+        decrypted_padded = cipher.decrypt(encrypted_bytes)
         decrypted_data = unpad(decrypted_padded, AES.block_size)
+        
+        # Converte bytes de volta para JSON
         return json.loads(decrypted_data.decode('utf-8'))
     except Exception as e:
-        # Se falhar, pode ser que a resposta não esteja criptografada (ex: erro de gateway)
-        print(f"Erro/Aviso na descriptografia CMI: {str(e)}")
-        # Tenta retornar como string pura caso seja um erro de texto plano
-        return {"raw_response": str(encrypted_base64_str)}
+        # Se falhar (ex: resposta não cifrada de erro), retorna o original para debug
+        return {"raw_response": str(encrypted_base64_str), "decrypt_error": str(e)}
 
-# --- Rota CMI ---
+# --- Rota Principal para o Make.com ---
 
 @app.route('/cmi_check_usage', methods=['POST'])
 def cmi_check_usage():
     try:
+        # 1. Receber dados do Make
         request_body = request.get_json()
         iccid = request_body.get("iccid")
         
         if not iccid:
-            return jsonify({"error": "ICCID is required"}), 400
+            return jsonify({"error": "ICCID é obrigatório"}), 400
 
-        # 1. Montar Payload Bruto
-        # O endpoint getSubscriberAllQuota requer 'iccid' e 'uuid'
+        # 2. Montar o Payload da CMI
+        # Nota: O UUID aqui é para o rastreamento da transação interna deles
         raw_payload = {
             "iccid": iccid,
             "uuid": str(uuid4())
         }
 
-        # 2. Criptografar Corpo
+        # 3. Criptografar o corpo
         encrypted_body = cmi_encrypt_body(raw_payload)
 
-        # 3. Gerar Headers
+        # 4. Gerar os Headers de Segurança
         headers = cmi_get_wsse_header()
         headers['Content-Type'] = 'application/json'
         headers['Accept'] = 'application/json'
 
-        # 4. Enviar Requisição
-        # Importante: O corpo vai como texto puro (a string criptografada), não como JSON {data: ...}
-        print(f"Consultando CMI para ICCID: {iccid}")
+        # 5. Enviar requisição para a China Mobile
+        print(f"Enviando consulta CMI para ICCID: {iccid}...")
         response = requests.post(CMI_URL, data=encrypted_body, headers=headers, timeout=30)
         
-        # 5. Processar Resposta
-        # A CMI retorna o status 200 mesmo se houver erro de negócio, mas o corpo vem cifrado.
-        # Se houver erro HTTP (4xx, 5xx), tentamos ler também.
-        
-        try:
-            # Tenta descriptografar a resposta
-            decrypted_json = cmi_decrypt_response(response.text)
-            
-            # Se o status code for erro, retorna o JSON descriptografado com o status code original
-            if response.status_code >= 400:
-                return jsonify(decrypted_json), response.status_code
-                
-            return jsonify(decrypted_json), 200
-
-        except Exception as decrypt_error:
-            # Se não conseguiu descriptografar, retorna o texto original
-            return jsonify({
-                "error": "Failed to decrypt CMI response", 
-                "raw": response.text,
-                "status": response.status_code
-            }), 500
+        # 6. Processar a resposta
+        # Se recebermos 200 OK, tentamos descriptografar
+        if response.status_code == 200:
+            result = cmi_decrypt_response(response.text)
+            return jsonify(result), 200
+        else:
+            # Se der erro (401, 500, etc), tentamos ver se o erro veio cifrado ou plano
+            print(f"Erro CMI Status: {response.status_code}")
+            try:
+                # Tenta descriptografar erro cifrado
+                decrypted_error = cmi_decrypt_response(response.text)
+                return jsonify(decrypted_error), response.status_code
+            except:
+                # Retorna erro plano
+                return jsonify({"error": "Erro na API CMI", "raw": response.text}), response.status_code
 
     except Exception as e:
-        print("!!!!!!!!!! ERRO EM /cmi_check_usage !!!!!!!!!!")
+        print("!!!!!!!!!! ERRO CRÍTICO EM /cmi_check_usage !!!!!!!!!!")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
