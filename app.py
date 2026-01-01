@@ -428,40 +428,50 @@ def cmi_check_usage():
         if not iccid:
             return jsonify({"error": "ICCID é obrigatório"}), 400
 
-        # 2. Montar o Payload da CMI
-        # Nota: O UUID aqui é para o rastreamento da transação interna deles
-        raw_payload = {
-            "iccid": iccid,
-            "uuid": str(uuid4())
-        }
-
-        # 3. Criptografar o corpo
+        # 2. Montar Payload e Criptografar
+        raw_payload = { "iccid": iccid, "uuid": str(uuid4()) }
         encrypted_body = cmi_encrypt_body(raw_payload)
 
-        # 4. Gerar os Headers de Segurança
+        # 3. Headers
         headers = cmi_get_wsse_header()
         headers['Content-Type'] = 'application/json'
         headers['Accept'] = 'application/json'
 
-        # 5. Enviar requisição para a China Mobile
+        # 4. Enviar requisição
         print(f"Enviando consulta CMI para ICCID: {iccid}...")
         response = requests.post(CMI_URL, data=encrypted_body, headers=headers, timeout=30)
         
-        # 6. Processar a resposta
-        # Se recebermos 200 OK, tentamos descriptografar
-        if response.status_code == 200:
+        # 5. Tratamento de Resposta Inteligente
+        try:
+            # Tenta ler como JSON direto (caso seja erro plano da CMI, ex: 1000002)
+            # A CMI retorna JSON plano quando falha a validação básica
+            resp_json_plano = response.json()
+            
+            if "code" in resp_json_plano and resp_json_plano["code"] != "0000000":
+                # É um erro da CMI. Tenta descriptografar a descrição se estiver cifrada
+                desc = resp_json_plano.get("description", "")
+                try:
+                    decrypted_desc_json = cmi_decrypt_response(desc) # Tenta decifrar a descrição
+                    resp_json_plano["description_decrypted"] = decrypted_desc_json
+                except:
+                    pass # Se não der pra decifrar a descrição, mantém a original
+                
+                return jsonify(resp_json_plano), 400 # Retorna o erro limpo
+                
+        except ValueError:
+            # Se deu erro ao tentar ler JSON (ValueError), é porque é texto puro criptografado (Sucesso)
+            pass
+
+        # Se chegou aqui, é o fluxo de sucesso (string criptografada)
+        try:
             result = cmi_decrypt_response(response.text)
             return jsonify(result), 200
-        else:
-            # Se der erro (401, 500, etc), tentamos ver se o erro veio cifrado ou plano
-            print(f"Erro CMI Status: {response.status_code}")
-            try:
-                # Tenta descriptografar erro cifrado
-                decrypted_error = cmi_decrypt_response(response.text)
-                return jsonify(decrypted_error), response.status_code
-            except:
-                # Retorna erro plano
-                return jsonify({"error": "Erro na API CMI", "raw": response.text}), response.status_code
+        except Exception as e:
+            return jsonify({
+                "error": "Falha ao descriptografar resposta de sucesso",
+                "raw": response.text, 
+                "details": str(e)
+            }), 500
 
     except Exception as e:
         print("!!!!!!!!!! ERRO CRÍTICO EM /cmi_check_usage !!!!!!!!!!")
