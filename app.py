@@ -417,50 +417,69 @@ def cmi_decrypt_response(encrypted_base64_str):
         # Se falhar (ex: resposta não cifrada de erro), retorna o original para debug
         return {"raw_response": str(encrypted_base64_str), "decrypt_error": str(e)}
 
-# --- Rota Principal para o Make.com ---
-
+# --- Rota Principal para o Make.com (Versão Blindada contra Erro 500) ---
 @app.route('/cmi_check_usage', methods=['POST'])
 def cmi_check_usage():
     try:
         # 1. Receber dados
-        request_body = request.get_json()
+        request_body = request.get_json() or {}
         iccid = request_body.get("iccid")
-        if not iccid: return jsonify({"error": "ICCID required"}), 400
+        
+        if not iccid:
+            return jsonify({"error": "ICCID is required"}), 400
 
         # 2. Montar Requisição
         raw_payload = { "iccid": iccid, "uuid": str(uuid4()) }
-        encrypted_body = cmi_encrypt_body(raw_payload)
+        
+        try:
+            encrypted_body = cmi_encrypt_body(raw_payload)
+        except Exception as e:
+            return jsonify({"error": "Encryption failed internally", "details": str(e)}), 500
         
         headers = cmi_get_wsse_header()
         headers['Content-Type'] = 'application/json'
+        headers['Accept'] = 'application/json'
 
-        # 3. Enviar para CMI
-        response = requests.post(CMI_URL, data=encrypted_body, headers=headers, timeout=30)
-        
-        # 4. Tratamento Seguro da Resposta
+        # 3. Enviar para CMI (Com timeout para não travar o Render)
         try:
-            # Tenta ler como JSON (erro plano da CMI)
+            response = requests.post(CMI_URL, data=encrypted_body, headers=headers, timeout=30)
+        except Exception as e:
+            return jsonify({"error": "Connection to CMI failed", "details": str(e)}), 502
+        
+        # 4. TRATAMENTO INTELIGENTE DA RESPOSTA (O segredo para corrigir o erro 500)
+        
+        # Cenário A: A CMI retornou um erro de negócio (JSON Puro, não cifrado)
+        # Ex: {"code": "1000002", "description": "..."}
+        try:
             resp_json = response.json()
-            
-            # Se tiver código de erro, retorna logo sem tentar decifrar descrições complexas
-            if "code" in resp_json and resp_json["code"] != "0000000":
-                return jsonify({
-                    "cmi_error": resp_json, 
-                    "suggestion": "Verifique se a AppKey no app.py nao tem espacos em branco"
-                }), 400
-                
-        except:
-            # Se não é JSON plano, é porque é sucesso (texto criptografado) ou erro fatal
+            if isinstance(resp_json, dict) and "code" in resp_json:
+                # Se achou um código de erro, retorna ele limpo para o Make
+                # Isso EVITA que o código tente descriptografar o que não é criptografado
+                print(f"Erro CMI recebido: {resp_json}")
+                return jsonify(resp_json), 400
+        except ValueError:
+            # Se der erro aqui, ótimo! Significa que não é JSON puro.
+            # Provavelmente é a string criptografada de sucesso.
             pass
 
-        # Tenta descriptografar sucesso
+        # Cenário B: Sucesso (String criptografada)
         try:
+            # Tenta descriptografar o corpo
             result = cmi_decrypt_response(response.text)
             return jsonify(result), 200
         except Exception as e:
-            return jsonify({"raw": response.text, "decrypt_error": str(e)}), 400
+            # Se falhar aqui, é porque veio lixo ou HTML de erro de servidor (ex: 404, 502 da CMI)
+            print("Erro de descriptografia:")
+            traceback.print_exc()
+            return jsonify({
+                "error": "Failed to decrypt response", 
+                "raw_response_preview": response.text[:200], # Mostra o começo pra debug
+                "details": str(e)
+            }), 500
 
     except Exception as e:
+        # Erro geral do Python (bug no código)
+        print("!!!!!!!!!! ERRO CRÍTICO !!!!!!!!!!")
         traceback.print_exc()
         return jsonify({"server_error": str(e)}), 500
 
