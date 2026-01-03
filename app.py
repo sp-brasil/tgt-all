@@ -417,65 +417,75 @@ def cmi_decrypt_response(encrypted_base64_str):
         # Se falhar (ex: resposta não cifrada de erro), retorna o original para debug
         return {"raw_response": str(encrypted_base64_str), "decrypt_error": str(e)}
 
-# --- Rota Principal para o Make.com (Versão Blindada contra Erro 500) ---
+# --- Rota Principal para o Make.com (Versão Ultra-Segura) ---
 @app.route('/cmi_check_usage', methods=['POST'])
 def cmi_check_usage():
     try:
-        # 1. Receber dados
+        # 1. Validação de Entrada
         request_body = request.get_json() or {}
         iccid = request_body.get("iccid")
         
         if not iccid:
-            return jsonify({"error": "ICCID is required"}), 400
+            return jsonify({"error": "ICCID é obrigatório"}), 400
 
-        # 2. Montar Requisição
-        raw_payload = { "iccid": iccid, "uuid": str(uuid4()) }
-        
+        # 2. Criptografia (Tratada para evitar 500)
         try:
+            raw_payload = { "iccid": iccid, "uuid": str(uuid4()) }
             encrypted_body = cmi_encrypt_body(raw_payload)
         except Exception as e:
-            return jsonify({"error": "Encryption failed internally", "details": str(e)}), 500
-        
-        headers = cmi_get_wsse_header()
-        headers['Content-Type'] = 'application/json'
-        headers['Accept'] = 'application/json'
+            return jsonify({"error": "Falha interna na criptografia AES", "details": str(e)}), 500
 
-        # 3. Enviar para CMI (Com timeout para não travar o Render)
+        # 3. Preparar Headers
         try:
-            response = requests.post(CMI_URL, data=encrypted_body, headers=headers, timeout=30)
+            headers = cmi_get_wsse_header()
+            headers['Content-Type'] = 'application/json'
+            headers['Accept'] = 'application/json'
         except Exception as e:
-            return jsonify({"error": "Connection to CMI failed", "details": str(e)}), 502
+            return jsonify({"error": "Falha ao gerar header WSSE", "details": str(e)}), 500
+
+        # 4. Envio para CMI (Tratando erro de Conexão)
+        print(f"Enviando requisicao para: {CMI_URL}")
+        try:
+            # Timeout reduzido para 25s para não estourar o limite do Render/Make
+            response = requests.post(CMI_URL, data=encrypted_body, headers=headers, timeout=25)
+        except requests.exceptions.Timeout:
+            return jsonify({"error": "Timeout: A CMI demorou muito para responder", "url": CMI_URL}), 504
+        except requests.exceptions.ConnectionError:
+            return jsonify({"error": "Erro de Conexão: Não foi possível conectar ao servidor da CMI", "url": CMI_URL}), 502
+        except Exception as e:
+            return jsonify({"error": "Erro desconhecido na requisição HTTP", "details": str(e)}), 500
+
+        # 5. Tratamento da Resposta
         
-        # 4. TRATAMENTO INTELIGENTE DA RESPOSTA (O segredo para corrigir o erro 500)
-        
-        # Cenário A: A CMI retornou um erro de negócio (JSON Puro, não cifrado)
-        # Ex: {"code": "1000002", "description": "..."}
+        # Cenário A: CMI retornou erro de negócio (JSON legível, ex: 1000002)
         try:
             resp_json = response.json()
+            # Se for um JSON válido e tiver 'code', retornamos como erro 400 (Bad Request)
+            # para o Make entender que foi recusado, mas não é falha do servidor.
             if isinstance(resp_json, dict) and "code" in resp_json:
-                # Se achou um código de erro, retorna ele limpo para o Make
-                # Isso EVITA que o código tente descriptografar o que não é criptografado
-                print(f"Erro CMI recebido: {resp_json}")
                 return jsonify(resp_json), 400
         except ValueError:
-            # Se der erro aqui, ótimo! Significa que não é JSON puro.
-            # Provavelmente é a string criptografada de sucesso.
+            # Se não for JSON, pode ser a string criptografada de sucesso. Continuamos.
             pass
 
-        # Cenário B: Sucesso (String criptografada)
+        # Cenário B: Tentativa de Descriptografar Sucesso
         try:
-            # Tenta descriptografar o corpo
             result = cmi_decrypt_response(response.text)
             return jsonify(result), 200
         except Exception as e:
-            # Se falhar aqui, é porque veio lixo ou HTML de erro de servidor (ex: 404, 502 da CMI)
-            print("Erro de descriptografia:")
-            traceback.print_exc()
+            # Se chegou aqui, a CMI respondeu algo que não é JSON erro nem criptografia válida
+            # Pode ser uma página HTML de erro (Proxy Error, 404, etc)
             return jsonify({
-                "error": "Failed to decrypt response", 
-                "raw_response_preview": response.text[:200], # Mostra o começo pra debug
-                "details": str(e)
-            }), 500
+                "error": "Falha ao ler resposta da CMI", 
+                "http_status": response.status_code,
+                "raw_preview": response.text[:200], # Mostra o começo da resposta para debug
+                "decrypt_error": str(e)
+            }), 502
+
+    except Exception as e:
+        # Última linha de defesa
+        traceback.print_exc()
+        return jsonify({"critical_error": "O script Python falhou", "details": str(e)}), 500
 
     except Exception as e:
         # Erro geral do Python (bug no código)
