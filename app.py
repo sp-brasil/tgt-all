@@ -338,6 +338,10 @@ CMI_APP_KEY = os.environ.get("CMI_APP_KEY", "o4rnH6VFc_vzqpDW-C5Xpoi-o8yw")
 # Mas garanta que esta senha é a correta.
 CMI_APP_SECRET = os.environ.get("CMI_APP_SECRET", "Peter@2023")
 
+# Chaves FIXAS para Criptografia do Corpo (AES-128-CBC)
+CMI_AES_KEY = b'u1d0b9a2c37U8d46'
+CMI_AES_IV = b'1016449182184177'
+
 # --- Funções Auxiliares CMI ---
 
 def cmi_get_wsse_header():
