@@ -326,17 +326,21 @@ def decrypt_notification():
 
 # --- Configurações de Produção CMI ---
 
-# 1. URL (Sem espaços no final)
-CMI_URL = os.environ.get("CMI_URL", "https://globalapi.udbac.com:18084/aep/APP_getSubscriberAllQuota_SBO/v2")
+# 1. URL
+CMI_URL = os.environ.get("CMI_URL", "https://globalapi.udbac.com:18084/aep/APP_getSubscriberAllQuota_SBO/v2").strip()
 
-# 2. APP KEY (A causa do erro 1000002)
-# Verifique se não há espaço antes do 'o' ou depois do 'w' dentro das aspas
-CMI_APP_KEY = os.environ.get("CMI_APP_KEY", "o4rnH6VFc_vzqpDW-C5Xpoi-o8yw")
+# 2. APP KEY (O foco do erro atual)
+# Adicionei .strip() para remover espaços acidentais
+CMI_APP_KEY = os.environ.get("CMI_APP_KEY", "o4rnH6VFc_vzqpDW-C5Xpoi-o8yw").strip()
 
-# 3. APP SECRET (Sua senha do portal)
-# Se a senha estiver errada, daria erro 1000001. Como está dando 1000002, o foco é a KEY acima.
-# Mas garanta que esta senha é a correta.
-CMI_APP_SECRET = os.environ.get("CMI_APP_SECRET", "Peter@2023")
+# 3. APP SECRET
+CMI_APP_SECRET = os.environ.get("CMI_APP_SECRET", "Peter@2023").strip()
+
+# DEBUG: Imprimir as credenciais mascaradas para garantir que estão sendo lidas
+print(f"--- DEBUG CMI ---")
+print(f"URL: {CMI_URL}")
+print(f"APP_KEY (primeiros 5 chars): {CMI_APP_KEY[:5]}... (Tamanho total: {len(CMI_APP_KEY)})")
+print(f"--- FIM DEBUG ---")
 
 # Chaves FIXAS para Criptografia do Corpo (AES-128-CBC)
 CMI_AES_KEY = b'u1d0b9a2c37U8d46'
