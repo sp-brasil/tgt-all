@@ -342,6 +342,7 @@ print(f"URL: {CMI_URL}")
 print(f"APP_KEY (primeiros 5 chars): {CMI_APP_KEY[:5]}... (Tamanho total: {len(CMI_APP_KEY)})")
 print(f"--- FIM DEBUG ---")
 
+
 # Chaves FIXAS para Criptografia do Corpo (AES-128-CBC)
 CMI_AES_KEY = b'u1d0b9a2c37U8d46'
 CMI_AES_IV = b'1016449182184177'
