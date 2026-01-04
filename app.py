@@ -345,27 +345,11 @@ CMI_AES_IV = b'1016449182184177'
 # --- Funções Auxiliares CMI ---
 
 def cmi_get_wsse_header():
-    """
-    Gera o cabeçalho X-WSSE seguindo a lógica Java fornecida pela CMI:
-    Passo 1: passwordStr = nonce + created + appSecret
-    Passo 2: hash = SHA256(passwordStr)
-    Passo 3: PasswordDigest = Base64(hash)
-    """
-    # 1. Nonce: String aleatória (usando UUID hex para garantir unicidade e sem caracteres especiais)
+    # ... (Mantenha o código original desta função, estava correto) ...
     nonce = uuid4().hex 
-    
-    # 2. Created: Timestamp UTC no formato ISO 8601
     created = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
-    
-    # 3. Concatenação (Java: passwordStr = nonce + created + appSecret)
-    # Importante: A ordem é estrita e sem separadores
     raw_string = nonce + created + CMI_APP_SECRET
-    
-    # 4. Hashing (Java: digest.digest(passwordStr.getBytes()))
-    # Usa SHA-256 e garante UTF-8
     sha256_bytes = hashlib.sha256(raw_string.encode('utf-8')).digest()
-    
-    # 5. Encoding (Java: Base64.encodeBase64String(hash))
     password_digest = base64.b64encode(sha256_bytes).decode('utf-8')
 
     return {
@@ -374,54 +358,40 @@ def cmi_get_wsse_header():
     }
 
 def cmi_encrypt_body(payload_dict):
-    """
-    Criptografa o payload JSON usando AES-128-CBC.
-    Retorna uma string Base64.
-    """
+    # ... (Mantenha o código original desta função, estava correto) ...
     try:
-        # O payload deve ser uma string JSON
         json_str = json.dumps(payload_dict)
-        
-        # Configura a cifra AES
         cipher = AES.new(CMI_AES_KEY, AES.MODE_CBC, CMI_AES_IV)
-        
-        # Faz o Padding (preenchimento) para múltiplo de 16 bytes
         padded_data = pad(json_str.encode('utf-8'), AES.block_size)
-        
-        # Criptografa
         encrypted_bytes = cipher.encrypt(padded_data)
-        
-        # Retorna como Base64
         return base64.b64encode(encrypted_bytes).decode('utf-8')
     except Exception as e:
         print(f"Erro na criptografia CMI: {str(e)}")
         raise
 
-def cmi_decrypt_response(encrypted_base64_str):
+def cmi_decrypt_text(encrypted_base64_str):
     """
-    Descriptografa a resposta da CMI (Base64 -> AES -> JSON).
+    Função auxiliar para descriptografar strings avulsas (como mensagens de erro).
     """
     try:
-        if not encrypted_base64_str:
-            return {}
-            
-        # Decodifica Base64
+        if not encrypted_base64_str: return ""
         encrypted_bytes = base64.b64decode(encrypted_base64_str)
-        
-        # Configura a cifra para descriptografar
         cipher = AES.new(CMI_AES_KEY, AES.MODE_CBC, CMI_AES_IV)
-        
-        # Descriptografa e remove o Padding
         decrypted_padded = cipher.decrypt(encrypted_bytes)
         decrypted_data = unpad(decrypted_padded, AES.block_size)
-        
-        # Converte bytes de volta para JSON
-        return json.loads(decrypted_data.decode('utf-8'))
+        return decrypted_data.decode('utf-8')
     except Exception as e:
-        # Se falhar (ex: resposta não cifrada de erro), retorna o original para debug
+        return f"Falha ao descriptografar: {str(e)}"
+
+def cmi_decrypt_response(encrypted_base64_str):
+    # ... (Versão simplificada que usa a função acima) ...
+    try:
+        json_str = cmi_decrypt_text(encrypted_base64_str)
+        return json.loads(json_str)
+    except Exception as e:
         return {"raw_response": str(encrypted_base64_str), "decrypt_error": str(e)}
 
-# --- Rota Principal para o Make.com (Versão Ultra-Segura) ---
+# --- Rota Principal para o Make.com (CORRIGIDA) ---
 @app.route('/cmi_check_usage', methods=['POST'])
 def cmi_check_usage():
     try:
@@ -432,7 +402,7 @@ def cmi_check_usage():
         if not iccid:
             return jsonify({"error": "ICCID é obrigatório"}), 400
 
-        # 2. Criptografia (Tratada para evitar 500)
+        # 2. Criptografia
         try:
             raw_payload = { "iccid": iccid, "uuid": str(uuid4()) }
             encrypted_body = cmi_encrypt_body(raw_payload)
@@ -447,56 +417,50 @@ def cmi_check_usage():
         except Exception as e:
             return jsonify({"error": "Falha ao gerar header WSSE", "details": str(e)}), 500
 
-        # 4. Envio para CMI (Tratando erro de Conexão)
+        # 4. Envio para CMI
         print(f"Enviando requisicao para: {CMI_URL}")
         try:
-            # Timeout reduzido para 25s para não estourar o limite do Render/Make
             response = requests.post(CMI_URL, data=encrypted_body, headers=headers, timeout=25)
         except requests.exceptions.Timeout:
-            return jsonify({"error": "Timeout: A CMI demorou muito para responder", "url": CMI_URL}), 504
-        except requests.exceptions.ConnectionError:
-            return jsonify({"error": "Erro de Conexão: Não foi possível conectar ao servidor da CMI", "url": CMI_URL}), 502
+            return jsonify({"error": "Timeout CMI", "url": CMI_URL}), 504
         except Exception as e:
-            return jsonify({"error": "Erro desconhecido na requisição HTTP", "details": str(e)}), 500
+            return jsonify({"error": "Erro de Conexão", "details": str(e)}), 502
 
-        # 5. Tratamento da Resposta
+        # 5. Tratamento da Resposta (AQUI ESTÁ A CORREÇÃO PRINCIPAL)
         
-        # Cenário A: CMI retornou erro de negócio (JSON legível, ex: 1000002)
+        # Cenário A: CMI retornou erro de negócio (JSON com code != 0 ou 0000)
         try:
             resp_json = response.json()
-            # Se for um JSON válido e tiver 'code', retornamos como erro 400 (Bad Request)
-            # para o Make entender que foi recusado, mas não é falha do servidor.
             if isinstance(resp_json, dict) and "code" in resp_json:
+                # Se houver uma descrição criptografada, vamos ler o que é!
+                if "description" in resp_json:
+                    try:
+                        decrypted_desc = cmi_decrypt_text(resp_json["description"])
+                        resp_json["description_decrypted"] = decrypted_desc
+                        # Substitui a descrição cifrada pela legível para facilitar a leitura no Make
+                        resp_json["description"] = decrypted_desc 
+                    except:
+                        pass # Se falhar, mantém o original
+                
                 return jsonify(resp_json), 400
         except ValueError:
-            # Se não for JSON, pode ser a string criptografada de sucesso. Continuamos.
-            pass
+            pass # Não é JSON, continua para tentar descriptografar como sucesso
 
-        # Cenário B: Tentativa de Descriptografar Sucesso
+        # Cenário B: Tentativa de Descriptografar Sucesso (Payload Base64 direto)
         try:
             result = cmi_decrypt_response(response.text)
             return jsonify(result), 200
         except Exception as e:
-            # Se chegou aqui, a CMI respondeu algo que não é JSON erro nem criptografia válida
-            # Pode ser uma página HTML de erro (Proxy Error, 404, etc)
             return jsonify({
                 "error": "Falha ao ler resposta da CMI", 
                 "http_status": response.status_code,
-                "raw_preview": response.text[:200], # Mostra o começo da resposta para debug
+                "raw_preview": response.text[:200],
                 "decrypt_error": str(e)
             }), 502
 
     except Exception as e:
-        # Última linha de defesa
         traceback.print_exc()
         return jsonify({"critical_error": "O script Python falhou", "details": str(e)}), 500
-
-    except Exception as e:
-        # Erro geral do Python (bug no código)
-        print("!!!!!!!!!! ERRO CRÍTICO !!!!!!!!!!")
-        traceback.print_exc()
-        return jsonify({"server_error": str(e)}), 500
-
 
 if __name__ == "__main__":
     app.run(debug=False)
