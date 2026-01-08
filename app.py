@@ -143,7 +143,10 @@ def get_all_esim_plans():
             sign = create_signature(service_name, request_time, encrypted_data)
             final_payload = { "accountId": ACCOUNT_ID, "serviceName": service_name, "requestTime": request_time, "data": encrypted_data, "version": API_VERSION, "sign": sign }
             
-            response = requests.post(BASE_URL + endpoint, data=json.dumps(final_payload), headers=headers, timeout=30)
+           # Use uma sessão para reaproveitar a conexão e ganhar velocidade
+            session = requests.Session()
+           # No loop de páginas:
+            response = session.post(BASE_URL + endpoint, data=json.dumps(final_payload), headers=headers, timeout=10)
             response.raise_for_status()
             response_json = response.json()
             
