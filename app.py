@@ -103,61 +103,39 @@ if __name__ == "__main__":
 # --- Rota Otimizada para Buscar Todos os Planos ---
 @app.route('/get_all_plans', methods=['POST'])
 def get_all_esim_plans():
-    all_plans = []
     try:
-        # Passo 1: Fazer a primeira chamada para descobrir o total
+        request_body = request.get_json() or {}
+        # Agora o Make envia qual página ele quer
+        page = request_body.get("page", 1) 
+        pageSize = request_body.get("pageSize", 50)
+
         service_name = "queryEsimProductListByParams"
         endpoint = "productApi/queryEsimProductListByParams"
         
-        data_payload = {"page": 1, "pageSize": 100, "lang": "en"}
+        data_payload = {"page": page, "pageSize": pageSize, "lang": "en"}
         data_str = json.dumps(data_payload)
         encrypted_data = aes_encrypt(data_str)
         request_time = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
         sign = create_signature(service_name, request_time, encrypted_data)
         
         final_payload = { "accountId": ACCOUNT_ID, "serviceName": service_name, "requestTime": request_time, "data": encrypted_data, "version": API_VERSION, "sign": sign }
-        headers = {'Content-Type': 'application/json'}
         
-        response = requests.post(BASE_URL + endpoint, data=json.dumps(final_payload), headers=headers, timeout=30)
+        # Apenas UMA chamada, sem loop interno
+        response = requests.post(BASE_URL + endpoint, data=json.dumps(final_payload), headers={'Content-Type': 'application/json'}, timeout=25)
         response.raise_for_status()
         response_json = response.json()
 
-        if response_json.get("code") != "0000":
-            return jsonify({"error": "Failed on first API call", "details": response_json}), 400
-
-        total_records = response_json.get("total", 0)
-        decrypted_data_list = json.loads(aes_decrypt(response_json["data"]))
+        if response_json.get("code") == "0000":
+            decrypted_data = json.loads(aes_decrypt(response_json["data"]))
+            return jsonify({
+                "total": response_json.get("total", 0),
+                "page": page,
+                "data": decrypted_data
+            }), 200
         
-        if total_records == 0:
-            return jsonify({"total": 0, "data": []}), 200
-        
-        all_plans.extend(decrypted_data_list)
-        total_pages = math.ceil(total_records / 100)
-
-        # Passo 2: Fazer o loop para as páginas restantes
-        for page_num in range(2, total_pages + 1):
-            data_payload["page"] = page_num
-            data_str = json.dumps(data_payload)
-            encrypted_data = aes_encrypt(data_str)
-            request_time = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
-            sign = create_signature(service_name, request_time, encrypted_data)
-            final_payload = { "accountId": ACCOUNT_ID, "serviceName": service_name, "requestTime": request_time, "data": encrypted_data, "version": API_VERSION, "sign": sign }
-            
-           # Use uma sessão para reaproveitar a conexão e ganhar velocidade
-            session = requests.Session()
-           # No loop de páginas:
-            response = session.post(BASE_URL + endpoint, data=json.dumps(final_payload), headers=headers, timeout=10)
-            response.raise_for_status()
-            response_json = response.json()
-            
-            if response_json.get("code") == "0000":
-                page_data = json.loads(aes_decrypt(response_json["data"]))
-                all_plans.extend(page_data)
-
-        return jsonify({"total": total_records, "data": all_plans}), 200
+        return jsonify(response_json), 400
 
     except Exception as e:
-        print("!!!!!!!!!! ERRO DETALHADO EM /get_all_plans !!!!!!!!!!")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
