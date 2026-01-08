@@ -107,7 +107,7 @@ def get_all_esim_plans():
         request_body = request.get_json() or {}
         # Agora o Make envia qual página ele quer
         page = request_body.get("page", 1) 
-        pageSize = request_body.get("pageSize", 50)
+        pageSize = request_body.get("pageSize", 5000)
 
         service_name = "queryEsimProductListByParams"
         endpoint = "productApi/queryEsimProductListByParams"
